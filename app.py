@@ -4,6 +4,7 @@ import db
 from pnl import compute_frame
 
 from datetime import datetime
+import admin
 import mapper
 import importer
 
@@ -40,8 +41,8 @@ if st.button("Refresh"):
     st.cache_data.clear()
     st.rerun()
 
-tab_paste, tab_dash, tab_active, tab_all, tab_unmapped = st.tabs(
-    ["Paste Fills", "Dashboard", "Active", "All Contracts", "Unmapped"]
+(tab_paste, tab_dash, tab_active, tab_all, tab_unmapped, tab_settings) = st.tabs(
+    ["Paste Fills", "Dashboard", "Active", "All Contracts", "Unmapped", "Settings"]
 )
 
 with tab_paste:
@@ -240,3 +241,72 @@ with tab_unmapped:
                     st.cache_data.clear()
                     st.success(f"Aliased. {n} fills resolved.")
                     st.rerun()
+
+with tab_settings:
+    st.subheader("Settings")
+    eng = db.get_engine()
+    with eng.connect() as conn:
+        c = admin.counts(conn)
+    st.caption(
+        f"{c['fills']:,} fills · {c['contracts']:,} contracts · "
+        f"{c['aliases']:,} aliases · {c['products']:,} products"
+    )
+
+    # ---- Import ----
+    st.divider()
+    st.markdown("#### Import data")
+    st.caption("Upload an Excel in the standard format. Fills are added and de-duplicated — re-uploading is safe.")
+    up = st.file_uploader("Excel file", type=["xlsx"])
+    if up is not None:
+        try:
+            parsed = admin.load_excel_fills(up)
+        except Exception as e:
+            st.error(f"Could not read file: {e}")
+            parsed = None
+
+        if parsed is not None and len(parsed):
+            with eng.connect() as conn:
+                resolved = importer.resolve(parsed, conn)
+                checked = importer.find_existing(resolved, conn)
+            n_new = int((~checked.is_duplicate).sum())
+            n_dup = int(checked.is_duplicate.sum())
+            n_unmapped = int(((~checked.is_duplicate) & (checked.resolved_via == "unmapped")).sum())
+
+            m1, m2, m3 = st.columns(3)
+            m1.metric("New", n_new)
+            m2.metric("Duplicates", n_dup)
+            m3.metric("Unmapped", n_unmapped)
+
+            if n_new and st.button(f"Import {n_new} fills", type="primary"):
+                from datetime import datetime
+                batch = "xlsx-" + datetime.now().strftime("%Y%m%d-%H%M%S")
+                with eng.begin() as conn:
+                    inserted = importer.commit(checked, conn, batch)
+                st.cache_data.clear()
+                st.success(f"Imported {inserted} fills.")
+                st.rerun()
+
+    # ---- Danger zone ----
+    st.divider()
+    st.markdown("#### :red[Danger zone]")
+
+    scope = st.radio(
+        "What to delete",
+        ["Fills only (keep contracts & mapping)", "Everything (fills, contracts, aliases, products)"],
+    )
+    everything = scope.startswith("Everything")
+
+    st.warning(
+        "This permanently deletes data and cannot be undone. "
+        + ("Your contract mapping will be wiped too — you'd need to re-import or re-map."
+           if everything else "Your contract mapping is kept; only fills are removed.")
+    )
+
+    phrase = "DELETE EVERYTHING" if everything else "DELETE FILLS"
+    typed = st.text_input(f"Type **{phrase}** to confirm")
+    if st.button("Delete", type="primary", disabled=(typed != phrase)):
+        with eng.begin() as conn:
+            n = admin.delete_everything(conn) if everything else admin.delete_fills_only(conn)
+        st.cache_data.clear()
+        st.success(f"Deleted {n:,} fills." + (" All mapping removed." if everything else ""))
+        st.rerun()
