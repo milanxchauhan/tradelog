@@ -10,12 +10,16 @@ import importer
 def check_password():
     if st.session_state.get("authed"):
         return True
-    pw = st.text_input("Password", type="password")
+
+    placeholder = st.empty()
+    pw = placeholder.text_input("Password", type="password")
     if pw:
         if pw == st.secrets.get("APP_PASSWORD"):
             st.session_state["authed"] = True
-            return True
-        st.error("Wrong password.")
+            placeholder.empty()   # remove the box from the page
+            st.rerun()            # redraw cleanly without it
+        else:
+            st.error("Wrong password.")
     return False
 
 
