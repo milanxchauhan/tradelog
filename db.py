@@ -9,9 +9,17 @@ from sqlalchemy import create_engine, text
 load_dotenv()
 
 
+def _database_url():
+    # Streamlit Cloud provides st.secrets; locally we fall back to .env
+    try:
+        return st.secrets["DATABASE_URL"]
+    except (KeyError, FileNotFoundError):
+        return os.environ["DATABASE_URL"]
+
+
 @st.cache_resource
 def get_engine():
-    return create_engine(os.environ["DATABASE_URL"], pool_pre_ping=True)
+    return create_engine(_database_url(), pool_pre_ping=True)
 
 
 @st.cache_data(ttl=60)
