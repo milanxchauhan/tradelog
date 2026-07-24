@@ -1,0 +1,6 @@
+streamlit
+pandas
+openpyxl
+psycopg2-binary
+sqlalchemy
+python-dotenv
