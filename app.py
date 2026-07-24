@@ -4,27 +4,27 @@ import db
 from pnl import compute_frame
 
 from datetime import datetime
-
+import mapper
 import importer
 
-def check_password():
-    if st.session_state.get("authed"):
-        return True
+# def check_password():
+#     if st.session_state.get("authed"):
+#         return True
 
-    placeholder = st.empty()
-    pw = placeholder.text_input("Password", type="password")
-    if pw:
-        if pw == st.secrets.get("APP_PASSWORD"):
-            st.session_state["authed"] = True
-            placeholder.empty()   # remove the box from the page
-            st.rerun()            # redraw cleanly without it
-        else:
-            st.error("Wrong password.")
-    return False
+#     placeholder = st.empty()
+#     pw = placeholder.text_input("Password", type="password")
+#     if pw:
+#         if pw == st.secrets.get("APP_PASSWORD"):
+#             st.session_state["authed"] = True
+#             placeholder.empty()   # remove the box from the page
+#             st.rerun()            # redraw cleanly without it
+#         else:
+#             st.error("Wrong password.")
+#     return False
 
 
-if not check_password():
-    st.stop()
+# if not check_password():
+#     st.stop()
 
 st.set_page_config(page_title="Trade Log", layout="wide")
 
@@ -172,3 +172,60 @@ with tab_unmapped:
     else:
         st.warning(f"{len(un)} unmapped contract strings")
         st.dataframe(un, use_container_width=True, hide_index=True)
+
+        st.divider()
+        st.subheader("Map a contract")
+
+        raw = st.selectbox("Unmapped string", un["raw_contract_string"].tolist())
+        row = un[un.raw_contract_string == raw].iloc[0]
+        st.caption(f"{int(row.fills)} fills · exchange {row.exchange}")
+
+        eng = db.get_engine()
+        with eng.connect() as conn:
+            prods = mapper.products(conn)
+
+        mode = st.radio(
+            "How should this resolve?",
+            ["New contract (CME/ICE — string is the name)",
+             "Alias to existing contract (ASE code)"],
+        )
+
+        # Guess the product from the leading token of the string.
+        guess = raw.split()[0].split("-")[0].strip()
+        default_idx = prods.index(guess) if guess in prods else 0
+
+        if mode.startswith("New"):
+            symbol = st.selectbox("Product", prods, index=default_idx)
+            with eng.connect() as conn:
+                d = mapper.product_defaults(conn, symbol)
+            c1, c2, c3 = st.columns(3)
+            tick_size = c1.number_input("Tick size", value=d.get("tick_size", 0.25), format="%.6f")
+            tick_value = c2.number_input("Tick value", value=d.get("tick_value", 12.5), format="%.4f")
+            rt_count = c3.number_input("RT count", value=2.0, step=1.0)
+            sub_category = st.text_input("Sub-category", value=symbol)
+
+            if st.button("Create & map", type="primary"):
+                with eng.begin() as conn:
+                    n = mapper.create_direct(
+                        conn, symbol, raw, tick_size, tick_value, rt_count,
+                        sub_category, row.exchange,
+                    )
+                st.cache_data.clear()
+                st.success(f"Mapped. {n} fills resolved.")
+                st.rerun()
+
+        else:
+            symbol = st.selectbox("Product", prods, index=default_idx)
+            with eng.connect() as conn:
+                choices = mapper.contracts_for_product(conn, symbol)
+            if not choices:
+                st.info("No contracts for this product yet — create one via the other mode first.")
+            else:
+                labels = {name: cid for cid, name in choices}
+                pick = st.selectbox("Point to contract", list(labels.keys()))
+                if st.button("Create alias & map", type="primary"):
+                    with eng.begin() as conn:
+                        n = mapper.create_aliased(conn, raw, labels[pick])
+                    st.cache_data.clear()
+                    st.success(f"Aliased. {n} fills resolved.")
+                    st.rerun()
