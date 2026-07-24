@@ -7,6 +7,21 @@ from datetime import datetime
 
 import importer
 
+def check_password():
+    if st.session_state.get("authed"):
+        return True
+    pw = st.text_input("Password", type="password")
+    if pw:
+        if pw == st.secrets.get("APP_PASSWORD"):
+            st.session_state["authed"] = True
+            return True
+        st.error("Wrong password.")
+    return False
+
+
+if not check_password():
+    st.stop()
+
 st.set_page_config(page_title="Trade Log", layout="wide")
 
 
