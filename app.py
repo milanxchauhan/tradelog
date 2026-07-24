@@ -3,6 +3,10 @@ import streamlit as st
 import db
 from pnl import compute_frame
 
+from datetime import datetime
+
+import importer
+
 st.set_page_config(page_title="Trade Log", layout="wide")
 
 
@@ -15,9 +19,60 @@ if st.button("Refresh"):
     st.cache_data.clear()
     st.rerun()
 
-tab_dash, tab_active, tab_all, tab_unmapped = st.tabs(
-    ["Dashboard", "Active", "All Contracts", "Unmapped"]
+tab_paste, tab_dash, tab_active, tab_all, tab_unmapped = st.tabs(
+    ["Paste Fills", "Dashboard", "Active", "All Contracts", "Unmapped"]
 )
+
+with tab_paste:
+    st.subheader("Paste fills")
+    st.caption("7 columns, tab-separated: date, time, exchange, contract, B/S, lots, price")
+
+    pasted = st.text_area("Fills", height=250, key="paste_box",
+                          placeholder="24Jul26\t16:53:46.192\tASE\tZS - [DFLY] - Jan27 [1:-3] - ASE\tS\t1\t2.75")
+
+    if pasted.strip():
+        try:
+            parsed = importer.parse_paste(pasted)
+        except ValueError as e:
+            st.error(str(e))
+            st.stop()
+
+        eng = db.get_engine()
+        with eng.connect() as conn:
+            resolved = importer.resolve(parsed, conn)
+            checked = importer.find_existing(resolved, conn)
+
+        n_new = int((~checked.is_duplicate).sum())
+        n_dup = int(checked.is_duplicate.sum())
+        n_unmapped = int(((~checked.is_duplicate) & (checked.resolved_via == "unmapped")).sum())
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Parsed", len(checked))
+        c2.metric("New", n_new)
+        c3.metric("Duplicates", n_dup)
+        c4.metric("Unmapped", n_unmapped)
+
+        if n_unmapped:
+            st.warning(
+                f"{n_unmapped} fills have contracts not in your mapping. "
+                "They will import and appear in the Unmapped tab."
+            )
+
+        st.dataframe(
+            checked[["ts", "exchange", "raw_contract_string", "side", "lots",
+                     "price", "resolved_via", "is_duplicate"]],
+            use_container_width=True, hide_index=True,
+        )
+
+        if n_new == 0:
+            st.info("Nothing new to import.")
+        else:
+            if st.button(f"Import {n_new} fills", type="primary"):
+                batch = datetime.now().strftime("%Y%m%d-%H%M%S")
+                with eng.begin() as conn:
+                    inserted = importer.commit(checked, conn, batch)
+                st.cache_data.clear()
+                st.success(f"Imported {inserted} fills (batch {batch}).")
 
 MONEY = "%.2f"
 
