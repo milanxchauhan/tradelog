@@ -26,8 +26,10 @@ def check_password():
 if not check_password():
     st.stop()
 
-st.set_page_config(page_title="Trade Log", layout="wide")
+st.set_page_config(page_title="Trade Log", page_icon="▤", layout="wide")
 
+import style
+style.apply()
 
 raw = db.load_positions()
 pos = compute_frame(raw)
@@ -110,22 +112,31 @@ with tab_dash:
         .sort_values("net_pl", ascending=False)
     )
 
+    total_booked = by_product.booked_pl.sum()
+    total_running = by_product.running_pl.sum()
+    total_net = by_product.net_pl.sum()
+
+    def pl_delta(v):
+        return f"{v:,.2f}"
+
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Booked P/L", f"{by_product.booked_pl.sum():,.2f}")
-    c2.metric("Running P/L", f"{by_product.running_pl.sum():,.2f}")
+    c1.metric("Booked P/L", f"${total_booked:,.0f}", pl_delta(total_booked))
+    c2.metric("Running P/L", f"${total_running:,.0f}", pl_delta(total_running))
     c3.metric("Total RT", f"{by_product.rt.sum():,.0f}")
-    c4.metric("Net P/L", f"{by_product.net_pl.sum():,.2f}")
+    c4.metric("Net P/L", f"${total_net:,.0f}", pl_delta(total_net))
 
     st.dataframe(
-        by_product,
-        use_container_width=True,
-        hide_index=True,
+        by_product.style.map(
+            lambda v: f"color: {'#22c55e' if v >= 0 else '#ef4444'}",
+            subset=["booked_pl", "running_pl", "net_pl"],
+        ),
+        use_container_width=True, hide_index=True,
         column_config={
-            "booked_pl": st.column_config.NumberColumn("Booked P/L", format=MONEY),
-            "running_pl": st.column_config.NumberColumn("Running P/L", format=MONEY),
-            "commission": st.column_config.NumberColumn("Commission", format=MONEY),
-            "rebate": st.column_config.NumberColumn("Rebate", format=MONEY),
-            "net_pl": st.column_config.NumberColumn("Net P/L", format=MONEY),
+            "booked_pl": st.column_config.NumberColumn("Booked P/L", format="%.2f"),
+            "running_pl": st.column_config.NumberColumn("Running P/L", format="%.2f"),
+            "commission": st.column_config.NumberColumn("Commission", format="%.2f"),
+            "rebate": st.column_config.NumberColumn("Rebate", format="%.2f"),
+            "net_pl": st.column_config.NumberColumn("Net P/L", format="%.2f"),
         },
     )
 
