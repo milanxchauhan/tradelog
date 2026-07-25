@@ -260,6 +260,9 @@ with tab_settings:
     if up is not None:
         try:
             parsed = admin.load_excel_fills(up)
+            with eng.begin() as conn:
+                np_, nc_ = admin.load_excel_full(up, conn)
+            st.info(f"Loaded mapping: {np_} products, {nc_} contracts.")
         except Exception as e:
             st.error(f"Could not read file: {e}")
             parsed = None

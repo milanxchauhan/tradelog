@@ -63,3 +63,60 @@ def load_excel_fills(file):
         "price": pd.to_numeric(fills["Price"], errors="coerce"),
     })
     return out.dropna(subset=["ts", "lots", "price"])
+
+def load_excel_full(file, conn):
+    """Load products, contracts, aliases from an uploaded workbook.
+    Only inserts what's missing — safe to run alongside existing data."""
+    clean = lambda s: " ".join(str(s).split()).strip()
+
+    mapping = pd.read_excel(file, sheet_name="Mapping", header=1).dropna(subset=["Contract "])
+    mapping["Product"] = mapping["Product"].fillna(mapping["Sub-Category"])
+    defaults = (mapping.dropna(subset=["Tick Size"])
+                .groupby("Product")[["Tick Size", "Tick Value"]].first())
+    for col in ["Tick Size", "Tick Value"]:
+        mapping[col] = mapping[col].fillna(mapping["Product"].map(defaults[col]))
+    mapping["RT "] = mapping["RT "].fillna(2.0)
+    mapping = mapping.dropna(subset=["Product", "Tick Size"])
+
+    ase = pd.read_excel(file, sheet_name="ASE Mapping").dropna(subset=["ASE", "Quoted"])
+
+    # products
+    prod_ids = {}
+    prods = mapping.groupby("Product").agg(
+        ts=("Tick Size", "max"), tv=("Tick Value", "max"), ex=("Exchange", "first")).reset_index()
+    for _, r in prods.iterrows():
+        pid = conn.execute(text("""
+            insert into products (symbol, exchange, tick_size, tick_value, commission_per_rt, rebate_per_rt)
+            values (:s,:e,:ts,:tv,0,0)
+            on conflict (symbol) do update set symbol = excluded.symbol
+            returning id"""),
+            {"s": r["Product"], "e": r["ex"], "ts": float(r["ts"]), "tv": float(r["tv"])}).scalar()
+        prod_ids[r["Product"]] = pid
+
+    # contracts
+    con_ids = {}
+    for _, r in mapping.iterrows():
+        name = clean(r["Contract "])
+        cid = conn.execute(text("""
+            insert into contracts (product_id, canonical_name, tt_code, category, sub_category,
+                                   rt_count, tick_size, tick_value, exchange)
+            values (:p,:c,:tt,:cat,:sub,:rt,:ts,:tv,:ex)
+            on conflict (canonical_name) do update set canonical_name = excluded.canonical_name
+            returning id"""),
+            {"p": prod_ids[r["Product"]], "c": name,
+             "tt": None if pd.isna(r["TT Code"]) else clean(r["TT Code"]),
+             "cat": None if pd.isna(r["Category"]) else clean(r["Category"]),
+             "sub": None if pd.isna(r["Sub-Category"]) else clean(r["Sub-Category"]),
+             "rt": float(r["RT "]), "ts": float(r["Tick Size"]), "tv": float(r["Tick Value"]),
+             "ex": None if pd.isna(r["Exchange"]) else clean(r["Exchange"])}).scalar()
+        con_ids[name] = cid
+
+    # aliases
+    for _, r in ase.iterrows():
+        cid = con_ids.get(clean(r["Quoted"]))
+        if cid:
+            conn.execute(text("""insert into contract_aliases (contract_id, source, alias_string)
+                                 values (:c,'ASE',:a) on conflict do nothing"""),
+                         {"c": cid, "a": clean(r["ASE"])})
+
+    return len(prod_ids), len(con_ids)
