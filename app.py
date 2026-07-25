@@ -202,7 +202,7 @@ with tab_unmapped:
              "Alias to existing contract (ASE code)"],
         )
 
-        # Guess the product from the leading token of the string.
+        # Guess the product from the leading token of the string
         guess = raw.split()[0].split("-")[0].strip()
         default_idx = prods.index(guess) if guess in prods else 0
 
